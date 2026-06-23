@@ -266,4 +266,116 @@ def get_moea_schedule(url, target_date_str):
                         sibling = sibling.find_next_sibling()
                 
                 for block in sch_blocks:
-                    kind_tag = block.find(class
+                    kind_tag = block.find(class_="minister-kind")
+                    title = kind_tag.get_text(strip=True) if kind_tag else None
+                    
+                    if not title or title not in categories_status:
+                        continue
+                    
+                    title_tag = block.find(class_="sch-title")
+                    if not title_tag:
+                        continue
+                    
+                    title_text = title_tag.get_text(strip=True)
+                    
+                    if "本日無公開行程" in title_text:
+                        continue
+                    
+                    time_match = re.match(r'^(\d+:\d+\s*[APMpm]+|[上下]午\s*\d+:\d+)', title_text)
+                    if time_match:
+                        time_str = time_match.group(1)
+                        content_str = title_text.replace(time_str, "", 1).strip()
+                    else:
+                        time_str = "-"
+                        content_str = title_text
+                    
+                    place_tag = block.find(class_="sch-place")
+                    place_str = place_tag.get_text(strip=True).replace("地點：", "").strip() if place_tag else "-"
+                    
+                    # 整合地點資訊進入行程內容中
+                    if place_str and place_str != "-":
+                        content_str = f"{content_str}（地點：{place_str}）"
+                    
+                    categories_status[title].append({"時間": time_str, "行程內容": content_str})
+                        
+    except Exception:
+        pass
+        
+    final_rows = []
+    for cat in ["部長", "次長"]:
+        data_list = categories_status[cat]
+        if data_list:
+            for item in data_list:
+                final_rows.append({
+                    "機關": "經濟部",
+                    "類別/官階": cat,
+                    "行程內容": item["行程內容"],
+                    "時間": item["時間"]
+                })
+        else:
+            final_rows.append({
+                "機關": "經濟部",
+                "類別/官階": cat,
+                "行程內容": "無公開行程",
+                "時間": "-"
+            })
+            
+    return final_rows
+
+
+# ==================== 4. 主畫面控制中心 ====================
+if start_search:
+    date_str = target_date.strftime("%Y-%m-%d")
+    all_consolidated_data = []
+    
+    with st.spinner(f"⚡ 正在跨單位同步 {date_str} 的特定政要公開行程..."):
+        # 抓取總統、副總統
+        try:
+            president_data = parse_president_schedule(target_date)
+            all_consolidated_data.extend(president_data)
+        except Exception as e:
+            st.error(f"總統/副總統行程抓取失敗: {e}")
+            
+        # 抓取行政院政要
+        try:
+            ey_urls = {
+                "院長": "https://www.ey.gov.tw/Page/278197D37F0FCDA",
+                "副院長": "https://www.ey.gov.tw/Page/EE0A18CCA0C9BC4",
+                "秘書長": "https://www.ey.gov.tw/Page/98C9B1D4B4F70B85"
+            }
+            for title, url in ey_urls.items():
+                ey_data = get_ey_data(url, title, date_str)
+                all_consolidated_data.extend(ey_data)
+        except Exception as e:
+            st.error(f"行政院政要行程抓取失敗: {e}")
+            
+        # 抓取經濟部政要
+        try:
+            moea_url = "https://www.moea.gov.tw/Mns/populace/news/MinisterSchedule.aspx?menu_id=42225"
+            moea_data = get_moea_schedule(moea_url, date_str)
+            all_consolidated_data.extend(moea_data)
+        except Exception as e:
+            st.error(f"經濟部政要行程抓取失敗: {e}")
+            
+        # 建立最終整合 DataFrame
+        df_final = pd.DataFrame(all_consolidated_data)
+        
+        st.success(f"📊 查詢成功！已完成 {date_str} 的特定政要行程解析。")
+        
+        # 依新結構定義最終顯示欄位順序（將時間置於最後）
+        display_cols = ["機關", "類別/官階", "行程內容", "時間"]
+        df_final = df_final[display_cols]
+        
+        # 顯示處理後總表
+        st.dataframe(df_final, use_container_width=True, hide_index=True)
+        
+        # 下載 CSV
+        csv_data = df_final.to_csv(index=False, encoding="utf-8-sig")
+        st.download_button(
+            label="📥 匯出政要行程表為 CSV",
+            data=csv_data,
+            file_name=f"特定政要公開行程表_{date_str}.csv",
+            mime="text/csv"
+        )
+else:
+    st.info("💡 請於左側設定抓取日期後，點擊「開始同步並篩選資料」按鈕。")
