@@ -360,7 +360,7 @@ if start_search:
         # 建立最終整合 DataFrame
         df_final = pd.DataFrame(all_consolidated_data)
         
-        st.success(f"📊 查詢成功！已完成 {date_str} 的特定政要行程解析。")
+        st.success(f"📊 查詢成功！已完成 {date_str} 政要行程。")
         
         # 依新結構定義最終顯示欄位順序（將時間置於最後）
         display_cols = ["機關", "類別/官階", "行程內容", "時間"]
@@ -374,7 +374,7 @@ if start_search:
         st.download_button(
             label="📥 匯出政要行程表為 CSV",
             data=csv_data,
-            file_name=f"特定政要公開行程表_{date_str}.csv",
+            file_name=f"政要公開行程表_{date_str}.csv",
             mime="text/csv"
         )
 else:
