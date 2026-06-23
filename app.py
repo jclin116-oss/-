@@ -9,11 +9,11 @@ import re
 # 關閉 SSL 憑證警告資訊
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 設定網頁標題與佈局 (這行必須是 Streamlit 的第一個指令)
-st.set_page_config(page_title="政要公開行程整合監測工具", layout="wide")
+# 設定網頁標題與佈局
+st.set_page_config(page_title="政要公開行程監測工具", layout="wide")
 
-st.title("🇹🇼 國家政要公開行程整合監測工具")
-st.caption("一鍵同步篩選：總統府、行政院、經濟部公開行程")
+st.title("🇹🇼 國家政要公開行程監測工具")
+st.caption("同步篩選核心政要人物公開行程（已排除非特定人物及特定單位）")
 
 # --- 側邊欄配置 ---
 st.sidebar.header("📅 設定抓取日期")
@@ -34,10 +34,10 @@ def parse_president_schedule(scraped_date):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
+    # 僅保留政要個人，排除總統府單位行程
     parsed_data = {
         "總統": {"時間": [], "行程內容": []},
-        "副總統": {"時間": [], "行程內容": []},
-        "總統府": {"時間": [], "行程內容": []}
+        "副總統": {"時間": [], "行程內容": []}
     }
 
     try:
@@ -70,6 +70,7 @@ def parse_president_schedule(scraped_date):
                             continue
                     
                     if in_target_section:
+                        # 檢查是否為要抓取的政要角色
                         if lines[i] in parsed_data.keys():
                             current_role = lines[i]
                             i += 1
@@ -77,7 +78,8 @@ def parse_president_schedule(scraped_date):
                             while i < len(lines):
                                 if i + 3 < len(lines) and lines[i].endswith("年") and lines[i+1].endswith("月") and lines[i+3] == "日":
                                     break
-                                if lines[i] in parsed_data.keys():
+                                # 這裡也要包含原有的"總統府"以便作為切換邊界，雖然不抓取它
+                                if lines[i] in ["總統", "副總統", "總統府"]:
                                     break
                                     
                                 line = lines[i]
@@ -89,7 +91,7 @@ def parse_president_schedule(scraped_date):
                                     time_val = line
                                     if i + 1 < len(lines):
                                         next_line = lines[i+1]
-                                        is_separator = (next_line in parsed_data.keys() or 
+                                        is_separator = (next_line in ["總統", "副總統", "總統府"] or 
                                                         re.match(r"^\d{2}:\d{2}", next_line) or 
                                                         (next_line.endswith("年") and i + 4 < len(lines) and lines[i+2].endswith("月")))
                                         if not is_separator:
@@ -110,7 +112,7 @@ def parse_president_schedule(scraped_date):
         pass
 
     final_rows = []
-    for role in ["總統", "副總統", "總統府"]:
+    for role in ["總統", "副總統"]:
         times = parsed_data[role]["時間"]
         contents = parsed_data[role]["行程內容"]
         
@@ -122,7 +124,6 @@ def parse_president_schedule(scraped_date):
         if times and contents:
             for t, c in zip(times, contents):
                 final_rows.append({
-                    "來源": "總統府",
                     "類別/官階": role,
                     "時間": t,
                     "地點": "-",
@@ -130,7 +131,6 @@ def parse_president_schedule(scraped_date):
                 })
         else:
             final_rows.append({
-                "來源": "總統府",
                 "類別/官階": role,
                 "時間": "-",
                 "地點": "-",
@@ -198,7 +198,6 @@ def get_ey_data(url, title, target_date_str):
                             content_str = " ".join(lines)
                             
                         scraped_data.append({
-                            "來源": "行政院",
                             "類別/官階": title,
                             "時間": time_str,
                             "地點": "-",
@@ -209,7 +208,6 @@ def get_ey_data(url, title, target_date_str):
         
     if not scraped_data:
         scraped_data.append({
-            "來源": "行政院",
             "類別/官階": title,
             "時間": "-",
             "地點": "-",
@@ -226,10 +224,10 @@ def get_moea_schedule(url, target_date_str):
         "Referer": "https://www.moea.gov.tw/"
     }
 
+    # 僅初始化部長與次長，排除所屬單位記者會
     categories_status = {
         "部長": [],
-        "次長": [],
-        "所屬單位記者會": []
+        "次長": []
     }
     
     has_real_schedule = set()
@@ -306,12 +304,11 @@ def get_moea_schedule(url, target_date_str):
         pass
         
     final_rows = []
-    for cat in ["部長", "次長", "所屬單位記者會"]:
+    for cat in ["部長", "次長"]:
         data_list = categories_status[cat]
         if data_list:
             for item in data_list:
                 final_rows.append({
-                    "來源": "經濟部",
                     "類別/官階": cat,
                     "時間": item["時間"],
                     "地點": item["地點"],
@@ -319,7 +316,6 @@ def get_moea_schedule(url, target_date_str):
                 })
         else:
             final_rows.append({
-                "來源": "經濟部",
                 "類別/官階": cat,
                 "時間": "-",
                 "地點": "-",
@@ -334,15 +330,15 @@ if start_search:
     date_str = target_date.strftime("%Y-%m-%d")
     all_consolidated_data = []
     
-    with st.spinner(f"⚡ 正在跨單位同步 {date_str} 的公開行程數據..."):
-        # 抓取總統府
+    with st.spinner(f"⚡ 正在跨單位同步 {date_str} 的特定政要公開行程..."):
+        # 抓取總統、副總統
         try:
             president_data = parse_president_schedule(target_date)
             all_consolidated_data.extend(president_data)
         except Exception as e:
-            st.error(f"總統府資料抓取失敗: {e}")
+            st.error(f"總統/副總統行程抓取失敗: {e}")
             
-        # 抓取行政院
+        # 抓取行政院政要
         try:
             ey_urls = {
                 "院長": "https://www.ey.gov.tw/Page/278197D37F0FCDA",
@@ -353,38 +349,34 @@ if start_search:
                 ey_data = get_ey_data(url, title, date_str)
                 all_consolidated_data.extend(ey_data)
         except Exception as e:
-            st.error(f"行政院資料抓取失敗: {e}")
+            st.error(f"行政院政要行程抓取失敗: {e}")
             
-        # 抓取經濟部
+        # 抓取經濟部政要
         try:
             moea_url = "https://www.moea.gov.tw/Mns/populace/news/MinisterSchedule.aspx?menu_id=42225"
             moea_data = get_moea_schedule(moea_url, date_str)
             all_consolidated_data.extend(moea_data)
         except Exception as e:
-            st.error(f"經濟部資料抓取失敗: {e}")
+            st.error(f"經濟部政要行程抓取失敗: {e}")
             
         # 建立大整合 DataFrame
         df_final = pd.DataFrame(all_consolidated_data)
         
-        st.success(f"📊 查詢成功！已完成 {date_str} 的全管道行程聯網解析。")
+        st.success(f"📊 查詢成功！已完成 {date_str} 的核心政要行程解析。")
         
-        # 欄位排序
-        display_cols = ["來源", "類別/官階", "時間", "地點", "行程內容"]
+        # 調整後欄位：排除來源，僅留下 類別/官階、時間、地點、行程內容
+        display_cols = ["類別/官階", "時間", "地點", "行程內容"]
         df_final = df_final[display_cols]
         
-        # 篩選功能 (Streamlit 內建過濾或多選)
-        sources = st.multiselect("過濾來源單位", options=["總統府", "行政院", "經濟部"], default=["總統府", "行政院", "經濟部"])
-        df_filtered = df_final[df_final["來源"].isin(sources)]
+        # 顯示過濾後總表
+        st.dataframe(df_final, use_container_width=True, hide_index=True)
         
-        # 顯示總表
-        st.dataframe(df_filtered, use_container_width=True, hide_index=True)
-        
-        # 下載大整合 CSV
-        csv_data = df_filtered.to_csv(index=False, encoding="utf-8-sig")
+        # 下載 CSV
+        csv_data = df_final.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
-            label="📥 匯出大整合行程表為 CSV",
+            label="📥 匯出政要行程表為 CSV",
             data=csv_data,
-            file_name=f"聯網政要行程整合表_{date_str}.csv",
+            file_name=f"核心政要公開行程表_{date_str}.csv",
             mime="text/csv"
         )
 else:
