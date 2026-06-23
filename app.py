@@ -10,13 +10,13 @@ import re
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 設定網頁標題與佈局
-st.set_page_config(page_title="政要公開行程監測工具", layout="wide")
+st.set_page_config(page_title="國家政要公開行程", layout="wide")
 
-st.title("🇹🇼 國家政要公開行程監測工具")
-st.caption("同步篩選核心政要人物公開行程（已調整欄位結構與合併地點）")
+st.title("總統府、行政院、經濟部公開行程")
+st.caption("平行篩選")
 
 # --- 側邊欄配置 ---
-st.sidebar.header("📅 設定抓取日期")
+st.sidebar.header("📅 設定日期")
 target_date = st.sidebar.date_input("選擇日期", datetime.today())
 start_search = st.sidebar.button("開始同步並篩選資料", type="primary")
 
