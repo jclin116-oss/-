@@ -10,16 +10,18 @@ import re
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 設定網頁標題與佈局
-st.set_page_config(page_title="國家政要公開行程", layout="wide")
+st.set_page_config(page_title="政要公開行程監測工具", layout="wide")
 
-st.title("總統府、行政院、經濟部公開行程")
-st.caption("272260")
+st.title("🇹🇼 國家政要公開行程監測工具")
+st.caption("同步篩選核心政要人物公開行程（含基隆區處轄區關鍵字自動提示）")
 
 # --- 側邊欄配置 ---
-st.sidebar.header("📅 設定日期")
+st.sidebar.header("📅 設定抓取日期")
 target_date = st.sidebar.date_input("選擇日期", datetime.today())
 start_search = st.sidebar.button("開始同步並篩選資料", type="primary")
 
+# 定義轄區關鍵字
+JURISDICTION_KEYWORDS = ["基隆", "雙溪", "貢寮", "老梅", "石門", "瑞芳", "萬里", "金山", "汐止"]
 
 # ==================== 1. 總統府解析邏輯 ====================
 def parse_president_schedule(scraped_date):
@@ -292,7 +294,6 @@ def get_moea_schedule(url, target_date_str):
                     place_tag = block.find(class_="sch-place")
                     place_str = place_tag.get_text(strip=True).replace("地點：", "").strip() if place_tag else "-"
                     
-                    # 整合地點資訊進入行程內容中
                     if place_str and place_str != "-":
                         content_str = f"{content_str}（地點：{place_str}）"
                     
@@ -329,14 +330,12 @@ if start_search:
     all_consolidated_data = []
     
     with st.spinner(f"⚡ 正在跨單位同步 {date_str} 的特定政要公開行程..."):
-        # 抓取總統、副總統
         try:
             president_data = parse_president_schedule(target_date)
             all_consolidated_data.extend(president_data)
         except Exception as e:
             st.error(f"總統/副總統行程抓取失敗: {e}")
             
-        # 抓取行政院政要
         try:
             ey_urls = {
                 "院長": "https://www.ey.gov.tw/Page/278197D37F0FCDA",
@@ -349,7 +348,6 @@ if start_search:
         except Exception as e:
             st.error(f"行政院政要行程抓取失敗: {e}")
             
-        # 抓取經濟部政要
         try:
             moea_url = "https://www.moea.gov.tw/Mns/populace/news/MinisterSchedule.aspx?menu_id=42225"
             moea_data = get_moea_schedule(moea_url, date_str)
@@ -357,24 +355,47 @@ if start_search:
         except Exception as e:
             st.error(f"經濟部政要行程抓取失敗: {e}")
             
-        # 建立最終整合 DataFrame
         df_final = pd.DataFrame(all_consolidated_data)
         
-        st.success(f"📊 查詢成功！已完成 {date_str} 政要行程。")
+        st.success(f"📊 查詢成功！已完成 {date_str} 的特定政要行程解析。")
         
-        # 依新結構定義最終顯示欄位順序（將時間置於最後）
         display_cols = ["機關", "類別/官階", "行程內容", "時間"]
         df_final = df_final[display_cols]
         
         # 顯示處理後總表
         st.dataframe(df_final, use_container_width=True, hide_index=True)
         
+        # ---- 轄區關鍵字比對邏輯 ----
+        st.subheader("🔍 基隆區處轄區到訪檢視")
+        
+        matched_records = []
+        for index, row in df_final.iterrows():
+            content = str(row["行程內容"])
+            # 找出行程內容中有包含哪些轄區關鍵字
+            found_keywords = [kw for kw in JURISDICTION_KEYWORDS if kw in content]
+            
+            if found_keywords:
+                matched_records.append({
+                    "機關": row["機關"],
+                    "類別/官階": row["類別/官階"],
+                    "行程內容": row["行程內容"],
+                    "時間": row["時間"],
+                    "觸發關鍵字": "、".join(found_keywords)
+                })
+        
+        if matched_records:
+            df_matched = pd.DataFrame(matched_records)
+            st.error(f"⚠️ 注意：偵測到當日有政要即將前往基隆區處轄區！")
+            st.dataframe(df_matched[["機關", "類別/官階", "觸發關鍵字", "行程內容", "時間"]], use_container_width=True, hide_index=True)
+        else:
+            st.success("✅ 經比對，當日無核心政要前往基隆區處轄區（基隆、雙溪、貢寮、老梅、石門、瑞芳、萬里、金山、汐止）的公開行程。")
+        
         # 下載 CSV
         csv_data = df_final.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
             label="📥 匯出政要行程表為 CSV",
             data=csv_data,
-            file_name=f"政要公開行程表_{date_str}.csv",
+            file_name=f"特定政要公開行程表_{date_str}.csv",
             mime="text/csv"
         )
 else:
