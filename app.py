@@ -1,0 +1,391 @@
+import streamlit as st
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+from datetime import datetime
+import urllib3
+import re
+
+# 關閉 SSL 憑證警告資訊
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# 設定網頁標題與佈局 (這行必須是 Streamlit 的第一個指令)
+st.set_page_config(page_title="政要公開行程整合監測工具", layout="wide")
+
+st.title("🇹🇼 國家政要公開行程整合監測工具")
+st.caption("一鍵同步篩選：總統府、行政院、經濟部公開行程")
+
+# --- 側邊欄配置 ---
+st.sidebar.header("📅 設定抓取日期")
+target_date = st.sidebar.date_input("選擇日期", datetime.today())
+start_search = st.sidebar.button("開始同步並篩選資料", type="primary")
+
+
+# ==================== 1. 總統府解析邏輯 ====================
+def parse_president_schedule(scraped_date):
+    date_str = scraped_date.strftime("%Y-%m-%d")
+    base_url = f"https://www.president.gov.tw/Page/37?FDate={date_str}&EDate={date_str}"
+    
+    roc_year_str = f"{scraped_date.year - 1911}年"
+    month_str = f"{scraped_date.month}月"
+    day_str = f"{scraped_date.day}"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    parsed_data = {
+        "總統": {"時間": [], "行程內容": []},
+        "副總統": {"時間": [], "行程內容": []},
+        "總統府": {"時間": [], "行程內容": []}
+    }
+
+    try:
+        res = requests.get(base_url, headers=headers, timeout=15, verify=False)
+        if res.status_code == 200:
+            res.encoding = 'utf-8'
+            soup = BeautifulSoup(res.text, "html.parser")
+            body = soup.find("body")
+            
+            if body:
+                raw_text = body.get_text(separator="\n", strip=True)
+                lines = [line.strip() for line in raw_text.split("\n") if line.strip()]
+                
+                in_target_section = False
+                current_role = None
+                i = 0
+                
+                while i < len(lines):
+                    if i + 3 < len(lines) and lines[i].endswith("年") and lines[i+1].endswith("月") and lines[i+3] == "日":
+                        if lines[i] == roc_year_str and lines[i+1] == month_str and lines[i+2] == day_str:
+                            in_target_section = True
+                            i += 4
+                            if i < len(lines) and lines[i].startswith("星期"):
+                                i += 1
+                            continue
+                        else:
+                            if in_target_section:
+                                break
+                            i += 4
+                            continue
+                    
+                    if in_target_section:
+                        if lines[i] in parsed_data.keys():
+                            current_role = lines[i]
+                            i += 1
+                            
+                            while i < len(lines):
+                                if i + 3 < len(lines) and lines[i].endswith("年") and lines[i+1].endswith("月") and lines[i+3] == "日":
+                                    break
+                                if lines[i] in parsed_data.keys():
+                                    break
+                                    
+                                line = lines[i]
+                                if line == "無公開行程":
+                                    parsed_data[current_role]["時間"].append("-")
+                                    parsed_data[current_role]["行程內容"].append("無公開行程")
+                                    i += 1
+                                elif re.match(r"^\d{2}:\d{2}", line):
+                                    time_val = line
+                                    if i + 1 < len(lines):
+                                        next_line = lines[i+1]
+                                        is_separator = (next_line in parsed_data.keys() or 
+                                                        re.match(r"^\d{2}:\d{2}", next_line) or 
+                                                        (next_line.endswith("年") and i + 4 < len(lines) and lines[i+2].endswith("月")))
+                                        if not is_separator:
+                                            parsed_data[current_role]["時間"].append(time_val)
+                                            parsed_data[current_role]["行程內容"].append(next_line)
+                                            i += 2
+                                            continue
+                                    parsed_data[current_role]["時間"].append(time_val)
+                                    parsed_data[current_role]["行程內容"].append("")
+                                    i += 1
+                                else:
+                                    i += 1
+                        else:
+                            i += 1
+                    else:
+                        i += 1
+    except Exception:
+        pass
+
+    final_rows = []
+    for role in ["總統", "副總統", "總統府"]:
+        times = parsed_data[role]["時間"]
+        contents = parsed_data[role]["行程內容"]
+        
+        if len(times) > 1 and "-" in times:
+            idx = times.index("-")
+            times.pop(idx)
+            contents.pop(idx)
+            
+        if times and contents:
+            for t, c in zip(times, contents):
+                final_rows.append({
+                    "來源": "總統府",
+                    "類別/官階": role,
+                    "時間": t,
+                    "地點": "-",
+                    "行程內容": c if c else "公開行程"
+                })
+        else:
+            final_rows.append({
+                "來源": "總統府",
+                "類別/官階": role,
+                "時間": "-",
+                "地點": "-",
+                "行程內容": "無公開行程"
+            })
+            
+    return final_rows
+
+
+# ==================== 2. 行政院解析邏輯 ====================
+def parse_taiwan_date(date_text):
+    if not date_text:
+        return None
+    try:
+        month_match = re.search(r'(\d+)\s*月', date_text)
+        day_match = re.search(r'(\d+)\s*日', date_text)
+        year_match = re.search(r'(\d+)\s*年', date_text)
+        
+        if month_match and day_match and year_match:
+            month = int(month_match.group(1))
+            day = int(day_match.group(1))
+            tw_year = int(year_match.group(1))
+            ad_year = tw_year + 1911
+            return f"{ad_year}-{month:02d}-{day:02d}"
+    except Exception:
+        pass
+    return None
+
+def get_ey_data(url, title, target_date_str):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    scraped_data = []
+
+    try:
+        res = requests.get(url, headers=headers, timeout=15, verify=False)
+        if res.status_code == 200:
+            res.encoding = 'utf-8'
+            soup = BeautifulSoup(res.text, "html.parser")
+            outer_blocks = soup.find_all(class_="timeline_block")
+            
+            for block in outer_blocks:
+                date_tag = block.find(class_=["timeline-date", "newsDate"])
+                if not date_tag:
+                    continue
+                    
+                raw_date_text = date_tag.get_text(separator=' ', strip=True)
+                parsed_date_str = parse_taiwan_date(raw_date_text)
+                
+                if parsed_date_str != target_date_str:
+                    continue
+                
+                content_tag = block.find(class_="timeline-content")
+                if content_tag:
+                    lines = [line.strip() for line in content_tag.get_text(separator="\n", strip=True).split("\n") if line.strip()]
+                    if lines:
+                        first_line = lines[0]
+                        time_match = re.match(r'^([上下]午\d+:\d+(?:~\d+:\d+)?|上午|下午)', first_line)
+                        
+                        if time_match:
+                            time_str = time_match.group(1)
+                            content_str = " ".join(lines).replace(time_str, "", 1).strip()
+                        else:
+                            time_str = "-"
+                            content_str = " ".join(lines)
+                            
+                        scraped_data.append({
+                            "來源": "行政院",
+                            "類別/官階": title,
+                            "時間": time_str,
+                            "地點": "-",
+                            "行程內容": content_str
+                        })
+    except Exception:
+        pass
+        
+    if not scraped_data:
+        scraped_data.append({
+            "來源": "行政院",
+            "類別/官階": title,
+            "時間": "-",
+            "地點": "-",
+            "行程內容": "無公開行程"
+        })
+        
+    return scraped_data
+
+
+# ==================== 3. 經濟部解析邏輯 ====================
+def get_moea_schedule(url, target_date_str):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer": "https://www.moea.gov.tw/"
+    }
+
+    categories_status = {
+        "部長": [],
+        "次長": [],
+        "所屬單位記者會": []
+    }
+    
+    has_real_schedule = set()
+    target_date_obj = datetime.strptime(target_date_str, "%Y-%m-%d")
+
+    try:
+        res = requests.get(url, headers=headers, timeout=15, verify=False)
+        if res.status_code == 200:
+            res.encoding = 'utf-8'
+            soup = BeautifulSoup(res.text, "html.parser")
+            date_tags = soup.find_all(id=re.compile(r'lblDate_S_'))
+            
+            for d_tag in date_tags:
+                date_text = d_tag.get_text(strip=True)
+                day_container = d_tag.find_parent(class_=re.compile(r'sch_day|divchs|divchs_items'))
+                if not day_container:
+                    day_container = d_tag.parent.parent
+                
+                year_tag = day_container.find(class_="sch_year")
+                year_text = year_tag.get_text(strip=True) if year_tag else str(target_date_obj.year)
+                
+                month_match = re.search(r'(\d+)\s*月', date_text)
+                day_match = re.search(r'(\d+)\s*日', date_text)
+                
+                if month_match and day_match:
+                    m = int(month_match.group(1))
+                    d = int(day_match.group(1))
+                    y = int(year_text)
+                    current_date_str = f"{y}-{m:02d}-{d:02d}"
+                else:
+                    continue
+                
+                if current_date_str != target_date_str:
+                    continue
+                
+                sch_blocks = day_container.find_all(class_="divSch")
+                if not sch_blocks:
+                    sibling = day_container.find_next_sibling()
+                    while sibling and "divSch" in sibling.get("class", []):
+                        sch_blocks.append(sibling)
+                        sibling = sibling.find_next_sibling()
+                
+                for block in sch_blocks:
+                    kind_tag = block.find(class_="minister-kind")
+                    title = kind_tag.get_text(strip=True) if kind_tag else None
+                    
+                    if not title or title not in categories_status:
+                        continue
+                    
+                    title_tag = block.find(class_="sch-title")
+                    if not title_tag:
+                        continue
+                    
+                    title_text = title_tag.get_text(strip=True)
+                    
+                    if "本日無公開行程" in title_text:
+                        continue
+                    
+                    time_match = re.match(r'^(\d+:\d+\s*[APMpm]+|[上下]午\s*\d+:\d+)', title_text)
+                    if time_match:
+                        time_str = time_match.group(1)
+                        content_str = title_text.replace(time_str, "", 1).strip()
+                    else:
+                        time_str = "-"
+                        content_str = title_text
+                    
+                    place_tag = block.find(class_="sch-place")
+                    place_str = place_tag.get_text(strip=True).replace("地點：", "").strip() if place_tag else "-"
+                    
+                    categories_status[title].append({"時間": time_str, "行程內容": content_str, "地點": place_str})
+                    has_real_schedule.add(title)
+                        
+    except Exception:
+        pass
+        
+    final_rows = []
+    for cat in ["部長", "次長", "所屬單位記者會"]:
+        data_list = categories_status[cat]
+        if data_list:
+            for item in data_list:
+                final_rows.append({
+                    "來源": "經濟部",
+                    "類別/官階": cat,
+                    "時間": item["時間"],
+                    "地點": item["地點"],
+                    "行程內容": item["行程內容"]
+                })
+        else:
+            final_rows.append({
+                "來源": "經濟部",
+                "類別/官階": cat,
+                "時間": "-",
+                "地點": "-",
+                "行程內容": "無公開行程"
+            })
+            
+    return final_rows
+
+
+# ==================== 4. 主畫面控制中心 ====================
+if start_search:
+    date_str = target_date.strftime("%Y-%m-%d")
+    all_consolidated_data = []
+    
+    with st.spinner(f"⚡ 正在跨單位同步 {date_str} 的公開行程數據..."):
+        # 抓取總統府
+        try:
+            president_data = parse_president_schedule(target_date)
+            all_consolidated_data.extend(president_data)
+        except Exception as e:
+            st.error(f"總統府資料抓取失敗: {e}")
+            
+        # 抓取行政院
+        try:
+            ey_urls = {
+                "院長": "https://www.ey.gov.tw/Page/278197D37F0FCDA",
+                "副院長": "https://www.ey.gov.tw/Page/EE0A18CCA0C9BC4",
+                "秘書長": "https://www.ey.gov.tw/Page/98C9B1D4B4F70B85"
+            }
+            for title, url in ey_urls.items():
+                ey_data = get_ey_data(url, title, date_str)
+                all_consolidated_data.extend(ey_data)
+        except Exception as e:
+            st.error(f"行政院資料抓取失敗: {e}")
+            
+        # 抓取經濟部
+        try:
+            moea_url = "https://www.moea.gov.tw/Mns/populace/news/MinisterSchedule.aspx?menu_id=42225"
+            moea_data = get_moea_schedule(moea_url, date_str)
+            all_consolidated_data.extend(moea_data)
+        except Exception as e:
+            st.error(f"經濟部資料抓取失敗: {e}")
+            
+        # 建立大整合 DataFrame
+        df_final = pd.DataFrame(all_consolidated_data)
+        
+        st.success(f"📊 查詢成功！已完成 {date_str} 的全管道行程聯網解析。")
+        
+        # 欄位排序
+        display_cols = ["來源", "類別/官階", "時間", "地點", "行程內容"]
+        df_final = df_final[display_cols]
+        
+        # 篩選功能 (Streamlit 內建過濾或多選)
+        sources = st.multiselect("過濾來源單位", options=["總統府", "行政院", "經濟部"], default=["總統府", "行政院", "經濟部"])
+        df_filtered = df_final[df_final["來源"].isin(sources)]
+        
+        # 顯示總表
+        st.dataframe(df_filtered, use_container_width=True, hide_index=True)
+        
+        # 下載大整合 CSV
+        csv_data = df_filtered.to_csv(index=False, encoding="utf-8-sig")
+        st.download_button(
+            label="📥 匯出大整合行程表為 CSV",
+            data=csv_data,
+            file_name=f"聯網政要行程整合表_{date_str}.csv",
+            mime="text/csv"
+        )
+else:
+    st.info("💡 請於左側設定抓取日期後，點擊「開始同步並篩選資料」按鈕。")
