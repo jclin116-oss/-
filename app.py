@@ -12,7 +12,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # 設定網頁標題與佈局
 st.set_page_config(page_title="政要公開行程", layout="wide")
 
-st.title("政要公開行程")
+st.title("總統府、行政院、經濟部")
 st.caption("行程爬蟲")
 
 # --- 側邊欄配置 ---
