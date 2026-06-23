@@ -10,13 +10,13 @@ import re
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 設定網頁標題與佈局
-st.set_page_config(page_title="政要公開行程", layout="wide")
+st.set_page_config(page_title="政要公開行程監測工具", layout="wide")
 
-st.title("總統府、行政院、經濟部")
-st.caption("行程爬蟲")
+st.title("🇹🇼 國家政要公開行程監測工具")
+st.caption("同步篩選核心政要人物公開行程（已調整欄位結構與合併地點）")
 
 # --- 側邊欄配置 ---
-st.sidebar.header("📅 設定日期")
+st.sidebar.header("📅 設定抓取日期")
 target_date = st.sidebar.date_input("選擇日期", datetime.today())
 start_search = st.sidebar.button("開始同步並篩選資料", type="primary")
 
@@ -34,7 +34,6 @@ def parse_president_schedule(scraped_date):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    # 僅保留政要個人，排除總統府單位行程
     parsed_data = {
         "總統": {"時間": [], "行程內容": []},
         "副總統": {"時間": [], "行程內容": []}
@@ -70,7 +69,6 @@ def parse_president_schedule(scraped_date):
                             continue
                     
                     if in_target_section:
-                        # 檢查是否為要抓取的政要角色
                         if lines[i] in parsed_data.keys():
                             current_role = lines[i]
                             i += 1
@@ -78,7 +76,6 @@ def parse_president_schedule(scraped_date):
                             while i < len(lines):
                                 if i + 3 < len(lines) and lines[i].endswith("年") and lines[i+1].endswith("月") and lines[i+3] == "日":
                                     break
-                                # 這裡也要包含原有的"總統府"以便作為切換邊界，雖然不抓取它
                                 if lines[i] in ["總統", "副總統", "總統府"]:
                                     break
                                     
@@ -124,17 +121,17 @@ def parse_president_schedule(scraped_date):
         if times and contents:
             for t, c in zip(times, contents):
                 final_rows.append({
+                    "機關": "總統府",
                     "類別/官階": role,
-                    "時間": t,
-                    "地點": "-",
-                    "行程內容": c if c else "公開行程"
+                    "行程內容": c if c else "公開行程",
+                    "時間": t
                 })
         else:
             final_rows.append({
+                "機關": "總統府",
                 "類別/官階": role,
-                "時間": "-",
-                "地點": "-",
-                "行程內容": "無公開行程"
+                "行程內容": "無公開行程",
+                "時間": "-"
             })
             
     return final_rows
@@ -198,20 +195,20 @@ def get_ey_data(url, title, target_date_str):
                             content_str = " ".join(lines)
                             
                         scraped_data.append({
+                            "機關": "行政院",
                             "類別/官階": title,
-                            "時間": time_str,
-                            "地點": "-",
-                            "行程內容": content_str
+                            "行程內容": content_str,
+                            "時間": time_str
                         })
     except Exception:
         pass
         
     if not scraped_data:
         scraped_data.append({
+            "機關": "行政院",
             "類別/官階": title,
-            "時間": "-",
-            "地點": "-",
-            "行程內容": "無公開行程"
+            "行程內容": "無公開行程",
+            "時間": "-"
         })
         
     return scraped_data
@@ -224,13 +221,11 @@ def get_moea_schedule(url, target_date_str):
         "Referer": "https://www.moea.gov.tw/"
     }
 
-    # 僅初始化部長與次長，排除所屬單位記者會
     categories_status = {
         "部長": [],
         "次長": []
     }
     
-    has_real_schedule = set()
     target_date_obj = datetime.strptime(target_date_str, "%Y-%m-%d")
 
     try:
@@ -271,113 +266,4 @@ def get_moea_schedule(url, target_date_str):
                         sibling = sibling.find_next_sibling()
                 
                 for block in sch_blocks:
-                    kind_tag = block.find(class_="minister-kind")
-                    title = kind_tag.get_text(strip=True) if kind_tag else None
-                    
-                    if not title or title not in categories_status:
-                        continue
-                    
-                    title_tag = block.find(class_="sch-title")
-                    if not title_tag:
-                        continue
-                    
-                    title_text = title_tag.get_text(strip=True)
-                    
-                    if "本日無公開行程" in title_text:
-                        continue
-                    
-                    time_match = re.match(r'^(\d+:\d+\s*[APMpm]+|[上下]午\s*\d+:\d+)', title_text)
-                    if time_match:
-                        time_str = time_match.group(1)
-                        content_str = title_text.replace(time_str, "", 1).strip()
-                    else:
-                        time_str = "-"
-                        content_str = title_text
-                    
-                    place_tag = block.find(class_="sch-place")
-                    place_str = place_tag.get_text(strip=True).replace("地點：", "").strip() if place_tag else "-"
-                    
-                    categories_status[title].append({"時間": time_str, "行程內容": content_str, "地點": place_str})
-                    has_real_schedule.add(title)
-                        
-    except Exception:
-        pass
-        
-    final_rows = []
-    for cat in ["部長", "次長"]:
-        data_list = categories_status[cat]
-        if data_list:
-            for item in data_list:
-                final_rows.append({
-                    "類別/官階": cat,
-                    "時間": item["時間"],
-                    "地點": item["地點"],
-                    "行程內容": item["行程內容"]
-                })
-        else:
-            final_rows.append({
-                "類別/官階": cat,
-                "時間": "-",
-                "地點": "-",
-                "行程內容": "無公開行程"
-            })
-            
-    return final_rows
-
-
-# ==================== 4. 主畫面控制中心 ====================
-if start_search:
-    date_str = target_date.strftime("%Y-%m-%d")
-    all_consolidated_data = []
-    
-    with st.spinner(f"⚡ 正在跨單位同步 {date_str} 的特定政要公開行程..."):
-        # 抓取總統、副總統
-        try:
-            president_data = parse_president_schedule(target_date)
-            all_consolidated_data.extend(president_data)
-        except Exception as e:
-            st.error(f"總統/副總統行程抓取失敗: {e}")
-            
-        # 抓取行政院政要
-        try:
-            ey_urls = {
-                "院長": "https://www.ey.gov.tw/Page/278197D37F0FCDA",
-                "副院長": "https://www.ey.gov.tw/Page/EE0A18CCA0C9BC4",
-                "秘書長": "https://www.ey.gov.tw/Page/98C9B1D4B4F70B85"
-            }
-            for title, url in ey_urls.items():
-                ey_data = get_ey_data(url, title, date_str)
-                all_consolidated_data.extend(ey_data)
-        except Exception as e:
-            st.error(f"行政院政要行程抓取失敗: {e}")
-            
-        # 抓取經濟部政要
-        try:
-            moea_url = "https://www.moea.gov.tw/Mns/populace/news/MinisterSchedule.aspx?menu_id=42225"
-            moea_data = get_moea_schedule(moea_url, date_str)
-            all_consolidated_data.extend(moea_data)
-        except Exception as e:
-            st.error(f"經濟部政要行程抓取失敗: {e}")
-            
-        # 建立大整合 DataFrame
-        df_final = pd.DataFrame(all_consolidated_data)
-        
-        st.success(f"📊 查詢成功！已完成 {date_str} 的核心政要行程解析。")
-        
-        # 調整後欄位：排除來源，僅留下 類別/官階、時間、地點、行程內容
-        display_cols = ["類別/官階", "時間", "地點", "行程內容"]
-        df_final = df_final[display_cols]
-        
-        # 顯示過濾後總表
-        st.dataframe(df_final, use_container_width=True, hide_index=True)
-        
-        # 下載 CSV
-        csv_data = df_final.to_csv(index=False, encoding="utf-8-sig")
-        st.download_button(
-            label="📥 匯出政要行程表為 CSV",
-            data=csv_data,
-            file_name=f"核心政要公開行程表_{date_str}.csv",
-            mime="text/csv"
-        )
-else:
-    st.info("💡 請於左側設定抓取日期後，點擊「開始同步並篩選資料」按鈕。")
+                    kind_tag = block.find(class
