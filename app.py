@@ -13,7 +13,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 st.set_page_config(page_title="國家政要公開行程", layout="wide")
 
 st.title("總統府、行政院、經濟部國家政要公開行程")
-st.caption("u272260-6-23")
+st.caption("u272260-115-6-23")
 
 # --- 側邊欄配置 ---
 st.sidebar.header("📅 設定日期")
