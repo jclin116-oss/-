@@ -10,13 +10,13 @@ import re
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # 設定網頁標題與佈局
-st.set_page_config(page_title="政要公開行程監測工具", layout="wide")
+st.set_page_config(page_title="國家政要公開行程", layout="wide")
 
-st.title("🇹🇼 國家政要公開行程監測工具")
-st.caption("同步篩選核心政要人物公開行程（含基隆區處轄區關鍵字自動提示）")
+st.title("總統府、行政院、經濟部國家政要公開行程")
+st.caption("u272260-6-23")
 
 # --- 側邊欄配置 ---
-st.sidebar.header("📅 設定抓取日期")
+st.sidebar.header("📅 設定日期")
 target_date = st.sidebar.date_input("選擇日期", datetime.today())
 start_search = st.sidebar.button("開始同步並篩選資料", type="primary")
 
@@ -357,7 +357,7 @@ if start_search:
             
         df_final = pd.DataFrame(all_consolidated_data)
         
-        st.success(f"📊 查詢成功！已完成 {date_str} 的特定政要行程解析。")
+        st.success(f"📊 查詢成功！已完成 {date_str} 的特定政要行程搜尋。")
         
         display_cols = ["機關", "類別/官階", "行程內容", "時間"]
         df_final = df_final[display_cols]
